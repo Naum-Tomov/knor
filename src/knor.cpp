@@ -1010,6 +1010,49 @@ AIGmaker::makeand(int rhs0, int rhs1)
 
 
 
+// we need some field that holds all products, potentially a 2d array, but I've heard those aren't great?
+
+// global int products[][];
+// global int productIndex;
+
+// addProduct(int product[], int num_of_literals) {
+// 	global products[productIndex] = products[0:num_of_literals];
+// 	productIndex++;
+// }
+
+// addProducts(ZDD node, int path[], pathLen) {
+
+// 	if (node == NULL) return;
+
+// 	path[pathLen] = zdd_getvariable(node);
+
+// 	pathLen++;
+	
+// 	if (node == zdd_true) { addProduct(path, pathLen); }
+// 	else if (node == zdd_false) { return; }
+// 	else {
+// 		addProducts(zdd_followlow(node), path, pathLen);
+// 		addProducts(zdd_followhigh(node), path, pathLen);
+// 	}
+// }
+
+// bdd_to_aig(MTBDD bdd)
+
+// 	ZDD isop;
+// 	bdd = zdd_isop(bdd, bdd, &isop);
+
+// 	int product[100];
+	
+// 	addProducts(isop, product, 0)
+
+//  products[][] is now filled with products of variables
+//  we can use var_to_lit to start creating and gates for all products systematically
+//  after we have all the products as AND gates, can start inverting the outputs and feeding them to
+//  NAND gates to get the sum of those products
+
+//  then we are done
+
+
 int
 AIGmaker::bdd_to_aig(MTBDD bdd)
 {

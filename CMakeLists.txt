@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.0)
 project(knor VERSION 1.0.0 LANGUAGES C CXX)
 
 set(PROJECT_DESCRIPTION "Knor, a simple synthesis tool for HOA parity automata")
-set(PROJECT_URL "https://github.com/trolando/knor")
+set(PROJECT_URL "https://github.com/Naum-Tomov/knor")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

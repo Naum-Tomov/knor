@@ -32,6 +32,7 @@
 #include <map>
 #include <set>
 #include <sys/time.h> // for gettimeofday
+#include <queue>
 
 #include <game.hpp>
 #include <oink.hpp>

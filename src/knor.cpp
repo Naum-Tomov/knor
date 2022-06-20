@@ -58,7 +58,7 @@ wctime()
  * evalLabel converts a label on a transition to a MTBDD encoding the label
  * a label is essentially a boolean combination of atomic propositions, and aliases (aliases are rare)
  */
-#define evalLabel(a,b,c) CALL(evalLabel,a,b,c)
+#define evalLabel(a,b,c) RUN(evalLabel,a,b,c)
 TASK_3(MTBDD, evalLabel, BTree*, label, HoaData*, data, uint32_t*, variables)
 {
     MTBDD left = mtbdd_false, right = mtbdd_false, result = mtbdd_false;
@@ -69,17 +69,17 @@ TASK_3(MTBDD, evalLabel, BTree*, label, HoaData*, data, uint32_t*, variables)
             result = label->id ? mtbdd_true : mtbdd_false;
             break;
         case NT_AND:
-            left = evalLabel(label->left, data, variables);
-            right = evalLabel(label->right, data, variables);
+            left = CALL(evalLabel, label->left, data, variables);
+            right = CALL(evalLabel, label->right, data, variables);
             result = sylvan_and(left, right);
             break;
         case NT_OR:
-            left = evalLabel(label->left, data, variables);
-            right = evalLabel(label->right, data, variables);
+            left = CALL(evalLabel, label->left, data, variables);
+            right = CALL(evalLabel, label->right, data, variables);
             result = sylvan_or(left, right);
             break;
         case NT_NOT:
-            left = evalLabel(label->left, data, variables);
+            left = CALL(evalLabel, label->left, data, variables);
             result = sylvan_not(left);
             break;
         case NT_AP:
@@ -90,7 +90,7 @@ TASK_3(MTBDD, evalLabel, BTree*, label, HoaData*, data, uint32_t*, variables)
             for (int i=0; i<data->noAliases; i++) {
                 Alias *a = data->aliases+i;
                 if (strcmp(a->alias, label->alias) == 0) {
-                    return evalLabel(a->labelExpr, data, variables);
+                    return CALL(evalLabel, a->labelExpr, data, variables);
                 }
             }
             break;
@@ -159,9 +159,6 @@ evalLabelNaive(BTree* label, Alias* aliases, int numAliases, int numAPs, int* ap
 
 
 
-
-
-
 /**
  * This helper function ensures that the priority p is adjusted to
  * ensure we have a "max, even" parity game, as this is what Oink expects.
@@ -181,8 +178,6 @@ adjustPriority(int p, bool maxPriority, bool controllerIsOdd, int noPriorities)
     if (controllerIsOdd) p--;
     return p;
 }
-
-
 
 
 /**
@@ -302,7 +297,6 @@ collect_targets2(MTBDD trans, std::set<uint64_t> &res, const int statebits, cons
 
         return cube;
     } else {
-        LACE_ME;
         MTBDD left = collect_targets2(mtbdd_getlow(trans), res, statebits, priobits);
         mtbdd_refs_push(left);
         MTBDD right = collect_targets2(mtbdd_gethigh(trans), res, statebits, priobits);
@@ -473,8 +467,6 @@ constructGame(HoaData *data, bool isMaxParity, bool controllerIsOdd)
     mtbdd_refs_pushptr(&lblbdd);
     mtbdd_refs_pushptr(&leaf);
 
-    LACE_ME;
-
     int ref_counter = 0;
 
     // Loop over every state
@@ -585,25 +577,55 @@ constructGame(HoaData *data, bool isMaxParity, bool controllerIsOdd)
 }
 
 
-typedef struct SymGame {
+class SymGame {
+public:
     int maxprio;
     int statebits;
     int priobits;
     int cap_count;
     int uap_count;
+
     MTBDD trans;       // transition relation of symbolic game:        state -> uap -> cap -> priority -> next_state
     MTBDD strategies;  // contains the solution: the strategies:       good_state -> uap -> cap
     MTBDD* cap_bdds;   // contains the solution: controllable ap bdds: state -> uap -> B
     MTBDD* state_bdds; // contains the solution: state bit bdds      : state -> uap -> B
-} SymGame;
+
+    SymGame(int statebits, int priobits, int uap_count, int cap_count, int maxprio) {
+        this->maxprio = maxprio;
+        this->uap_count = uap_count;
+        this->cap_count = cap_count;
+        this->statebits = statebits;
+        this->priobits = priobits;
+
+        trans = mtbdd_false;
+        strategies = mtbdd_false;
+        mtbdd_protect(&trans);
+        mtbdd_protect(&strategies);
+
+        cap_bdds = new MTBDD[cap_count];
+        for (int i=0; i<cap_count; i++) cap_bdds[i] = mtbdd_false;
+        for (int i=0; i<cap_count; i++) mtbdd_protect(&cap_bdds[i]);
+        state_bdds = new MTBDD[statebits];
+        for (int i=0; i<statebits; i++) state_bdds[i] = mtbdd_false;
+        for (int i=0; i<statebits; i++) mtbdd_protect(&state_bdds[i]);
+    }
+
+    virtual ~SymGame() {
+        for (int i=0; i<cap_count; i++) mtbdd_unprotect(&cap_bdds[i]);
+        for (int i=0; i<statebits; i++) mtbdd_unprotect(&state_bdds[i]);
+
+        delete[] cap_bdds;
+        delete[] state_bdds;
+    }
+};
 
 
 
 /**
  * Construct the symbolic game
  */
-void
-constructSymGame(HoaData *data, SymGame *res, bool isMaxParity, bool controllerIsOdd)
+SymGame*
+constructSymGame(HoaData *data, bool isMaxParity, bool controllerIsOdd)
 {
     int vstart = data->start[0];
 
@@ -620,10 +642,12 @@ constructSymGame(HoaData *data, SymGame *res, bool isMaxParity, bool controllerI
     // Prepare number of statebits and priobits
     int statebits = 1;
     while ((1ULL<<(statebits)) <= (uint64_t)data->noStates) statebits++;
+
     const int evenMax = 2 + 2*((data->noAccSets+1)/2); // should be enough...
     int priobits = 1;
     while ((1ULL<<(priobits)) <= (unsigned)evenMax) priobits++;
-    int maxprio = 0;
+
+    SymGame *res = new SymGame(statebits, priobits, uap_count, cap_count, 0);
 
     // first <priobits, statebits> will be state variables
 
@@ -639,26 +663,25 @@ constructSymGame(HoaData *data, SymGame *res, bool isMaxParity, bool controllerI
 
     // only if verbose: std::cout << "prio bits: " << priobits << " and state bits: " << statebits << std::endl;
 
-    MTBDD fulltrans = mtbdd_false; // no transitions yet
-    mtbdd_refs_pushptr(&fulltrans);
-    MTBDD trans_bdd = mtbdd_false;
-    mtbdd_refs_pushptr(&trans_bdd);
-
     // these variables are used deeper in the for loops, however we can
     // push them to mtbdd refs here and avoid unnecessary pushing and popping
+    MTBDD transbdd = mtbdd_false;
     MTBDD statebdd = mtbdd_false;
     MTBDD lblbdd = mtbdd_false;
     MTBDD leaf = mtbdd_false;
+
+    mtbdd_refs_pushptr(&transbdd);
     mtbdd_refs_pushptr(&statebdd);
     mtbdd_refs_pushptr(&lblbdd);
     mtbdd_refs_pushptr(&leaf);
 
-    LACE_ME;
     // Loop over every state
     for (int i=0; i<data->noStates; i++) {
         auto state = data->states+i;
+
         for (int j=0; j<state->noTrans; j++) {
             auto trans = state->transitions+j;
+
             // there should be a single successor per transition
             assert(trans->noSucc == 1);
             // there should be a label at state or transition level
@@ -676,47 +699,46 @@ constructSymGame(HoaData *data, SymGame *res, bool isMaxParity, bool controllerI
                 assert(data->states[id].noAccSig == 1);
                 priority = adjustPriority(data->states[id].accSig[0], isMaxParity, controllerIsOdd, data->noAccSets);
             }
-            if (priority > maxprio) maxprio = priority;
-            // convert the label to a MTBDD
-            lblbdd = evalLabel(label, data, variables);
+            if (priority > res->maxprio) res->maxprio = priority;
             // swap with initial if needed
             int succ = trans->successors[0];
             if (succ == 0) succ = vstart;
             else if (succ == vstart) succ = 0;
+            // encode the label as a MTBDD
+            lblbdd = evalLabel(label, data, variables);
             // encode priostate (leaf) and update transition relation
             leaf = encode_priostate(succ, priority, statebits, priobits, statebits+priobits+data->noAPs);
-            trans_bdd = mtbdd_ite(lblbdd, leaf, trans_bdd);
-            lblbdd = leaf = mtbdd_false; // deref
+            // trans := lbl THEN leaf ELSE trans
+            transbdd = mtbdd_ite(lblbdd, leaf, transbdd);
+            // deref lblbdd and leaf
+            lblbdd = leaf = mtbdd_false;
+
             // std::cout << "added transition from " << state->id << " with prio " << priority << " to " << trans->successors[0] << std::endl; 
         }
 
+        // encode source state and add to full transition relation
         int src = state->id;
         if (src == 0) src = vstart;
         else if (src == vstart) src = 0;
         statebdd = encode_state(src, statebits, priobits, 0);
-        fulltrans = mtbdd_ite(statebdd, trans_bdd, fulltrans);
-        statebdd = trans_bdd = mtbdd_false; // deref
+        // update full trans with <statebdd> then <transbdd>
+        res->trans = mtbdd_ite(statebdd, transbdd, res->trans);
+        // deref statebdd and transbdd
+        statebdd = transbdd = mtbdd_false;
     }
 
-    mtbdd_refs_popptr(5);
+    mtbdd_refs_popptr(4);
 
-    res->maxprio = maxprio;
-    res->statebits = statebits;
-    res->priobits = priobits;
-    res->cap_count = cap_count;
-    res->uap_count = uap_count;
-    res->trans = fulltrans;
-    res->cap_bdds = new MTBDD[cap_count];
-    for (int i=0; i<cap_count; i++) res->cap_bdds[i] = mtbdd_false;
-    res->state_bdds = new MTBDD[statebits];
-    for (int i=0; i<statebits; i++) res->state_bdds[i] = mtbdd_false;
+    return res;
 }
 
 
+/**
+ * Encode priority i.e. all states via priority <priority>
+ */
 MTBDD
 encodeprio(int priority, int priobits)
 {
-    // construct all states with priority pr
     MTBDD cube = mtbdd_true;
     for (int i=0; i<priobits; i++) {
         if (priority & 1) cube = mtbdd_makenode(priobits-i-1, mtbdd_false, cube);
@@ -727,6 +749,9 @@ encodeprio(int priority, int priobits)
 }
 
 
+/**
+ * Given a strategy, if there is choice, choose the zero edge
+ */
 TASK_2(MTBDD, clarify, MTBDD, str, MTBDD, cap_vars)
 {
     if (mtbdd_set_isempty(cap_vars)) return str;
@@ -765,36 +790,201 @@ TASK_2(MTBDD, clarify, MTBDD, str, MTBDD, cap_vars)
 }
 
 
-
-TASK_2(MTBDD, and_reduce, MTBDD, str, uint32_t, priobits)
+pg::Game*
+symgame_to_pg(const SymGame &game)
 {
-    // return str;
-    if (mtbdd_isleaf(str)) return str;
+    // Construct s_vars the set of state variables of the symbolic game
+    MTBDD s_vars = mtbdd_set_empty();
+    mtbdd_refs_pushptr(&s_vars);
+    for (int i=0; i<game.statebits; i++) s_vars = mtbdd_set_add(s_vars, game.priobits+i);
 
-    uint32_t var = mtbdd_getvar(str);
-    if (var >= priobits) return str;
+    // Construct uap_vars the set of uncontrollable AP variables
+    MTBDD uap_vars = mtbdd_set_empty();
+    mtbdd_refs_pushptr(&uap_vars);
+    for (int i=0; i<game.uap_count; i++) uap_vars = mtbdd_set_add(uap_vars, game.priobits+game.statebits+i);
 
-    if (mtbdd_getlow(str) == mtbdd_false) {
-        return CALL(and_reduce, mtbdd_gethigh(str), priobits);
-    } else if (mtbdd_gethigh(str) == mtbdd_false) {
-        return CALL(and_reduce, mtbdd_getlow(str), priobits);
-    } else {
-        MTBDD low = CALL(and_reduce, mtbdd_getlow(str), priobits);
-        mtbdd_refs_pushptr(&low);
-        MTBDD high = CALL(and_reduce, mtbdd_gethigh(str), priobits);
-        mtbdd_refs_pushptr(&high);
-        MTBDD res = CALL(sylvan_and, low, high, 0);
-        mtbdd_refs_popptr(2);
-        return res;
+    // Construct cap_vars the set of controllable AP variables
+    MTBDD cap_vars = mtbdd_set_empty();
+    mtbdd_refs_pushptr(&cap_vars);
+    for (int i=0; i<game.cap_count; i++) cap_vars = mtbdd_set_add(cap_vars, game.priobits+game.statebits+game.uap_count+i);
+
+    // Construct ns_vars the set of next prio-state variables 
+    MTBDD ns_vars = mtbdd_set_empty();
+    mtbdd_refs_pushptr(&ns_vars);
+    const int offset = game.cap_count + game.uap_count + game.priobits + game.statebits;
+    for (int i=0; i<(game.priobits + game.statebits); i++) ns_vars = mtbdd_set_add(ns_vars, offset + i);
+
+    // Compute the number of states from the strategy of the solved symbolic game (?)
+    MTBDD states = sylvan_project(game.trans, s_vars);
+    long noStates = (long)sylvan_satcount(states, s_vars);
+    // std::cout << "there are " << noStates << " states" << std::endl;
+
+    // mapper will store for each [decoded] state in the symbolic game, the parity game node id
+    std::map<int, int> mapper;
+
+    // Start constructing the parity game for given number of states
+    pg::Game *pargame = new pg::Game(noStates);
+
+    // First initialize a parity game vertex for every state in the symbolic game
+    {
+        int idx=0;
+
+        uint8_t state_arr[game.statebits];
+        MTBDD lf = mtbdd_enum_all_first(states, s_vars, state_arr, NULL);
+        while (lf != mtbdd_false) {
+            // decode state
+            int state = 0;
+            for (int i=0; i<game.statebits; i++) {
+                state <<= 1;
+                if (state_arr[i]) state |= 1;
+            }
+
+            pargame->init_vertex(idx, 0, 1, std::to_string(state)); // controlled by the Odd
+            mapper[state] = idx++;
+
+            lf = mtbdd_enum_all_next(states, s_vars, state_arr, NULL);
+        }
     }
+
+    // Check that the transition relation of the symbolic game does not have priobits on source states
+    assert(mtbdd_getvar(game.trans) >= (unsigned) game.priobits);
+
+    // index of next parity game vertex (for the priority on the edge)
+    int vidx = noStates;
+
+    std::vector<int> succ_state;  // for current state, the successors
+
+    std::map<MTBDD, int> uap_to_vertex; // map after-uap to vertex
+    std::map<MTBDD, int> cap_to_vertex; // map after-cap (priority) to vertex
+
+    uint8_t state_arr[game.statebits];
+    MTBDD lf = mtbdd_enum_all_first(game.trans, s_vars, state_arr, NULL);
+    while (lf != mtbdd_false) {
+        // decode state
+        int _s = 0;
+        for (int i=0; i<game.statebits; i++) {
+            _s <<= 1;
+            if (state_arr[i]) _s |= 1;
+        }
+
+        // translate _s to state
+        int state = mapper.at(_s);
+
+        // find all "successors" of this state after the environment plays (uap)
+        std::set<MTBDD> after_uap;
+        {
+            uint8_t uap_arr[game.uap_count];
+            MTBDD lf2 = mtbdd_enum_first(lf, uap_vars, uap_arr, NULL);
+            while (lf2 != mtbdd_false) {
+                after_uap.insert(lf2);
+                lf2 = mtbdd_enum_next(lf, uap_vars, uap_arr, NULL);
+            }
+        }
+
+        // start adding edges!
+        pargame->e_start(state);
+
+        for (MTBDD uap_bdd : after_uap) {
+            // check if we have seen this symbolic state before
+            auto search = uap_to_vertex.find(uap_bdd);
+            if (search != uap_to_vertex.end()) {
+                // already exists
+                // add edge from <state> to <search->second>
+                pargame->e_add(state, search->second);
+            } else {
+                int uapv = vidx++;
+                pargame->init_vertex(uapv, 0, 0, std::to_string(uap_bdd)); // controlled by Even
+                uap_to_vertex[uap_bdd] = uapv;
+                // add edge from <state> to <uapv>
+                pargame->e_add(state, uapv);
+            }
+        }
+
+        // we're done adding edges!
+        pargame->e_finish();
+
+        lf = mtbdd_enum_all_next(game.trans, s_vars, state_arr, NULL);
+    }
+
+    // we now have all post-UAP in the uap_to_vertex map, so lets process them...
+
+    for (auto x = uap_to_vertex.begin(); x != uap_to_vertex.end(); x++) {
+        const MTBDD uap_bdd = x->first;
+        const int uap_v = x->second;
+
+        std::set<MTBDD> after_cap;
+        {
+            uint8_t cap_arr[game.cap_count];
+            MTBDD lf = mtbdd_enum_first(uap_bdd, cap_vars, cap_arr, NULL);
+            while (lf != mtbdd_false) {
+                after_cap.insert(lf);
+                lf = mtbdd_enum_next(uap_bdd, cap_vars, cap_arr, NULL);
+            }
+        }
+
+        pargame->e_start(uap_v);
+
+        for (MTBDD cap_bdd : after_cap) {
+            // only if not yet there
+            auto search2 = cap_to_vertex.find(cap_bdd);
+            if (search2 != cap_to_vertex.end()) {
+                pargame->e_add(uap_v, search2->second);
+            } else {
+                int capv = vidx++;
+
+                uint8_t ns_arr[game.priobits+game.statebits];
+                MTBDD lf2 = mtbdd_enum_all_first(cap_bdd, ns_vars, ns_arr, NULL);
+                assert(lf2 == mtbdd_true);
+
+                // decode priostate
+                int pr = 0;
+                for (int i=0; i<game.priobits; i++) {
+                    pr <<= 1;
+                    if (ns_arr[i]) pr |= 1;
+                }
+
+                pargame->init_vertex(capv, pr, 0, std::to_string(cap_bdd)); // controlled by any
+                cap_to_vertex[cap_bdd] = capv;
+                pargame->e_add(uap_v, capv);
+            }
+        }
+
+        pargame->e_finish();
+    }
+
+    // we now have all post-CAP in the cap_to_vertex map, so lets process them...
+
+    for (auto x = cap_to_vertex.begin(); x != cap_to_vertex.end(); x++) {
+        const MTBDD cap_bdd = x->first;
+        const int cap_v = x->second;
+
+        uint8_t ns_arr[game.priobits+game.statebits];
+        MTBDD lf2 = mtbdd_enum_all_first(cap_bdd, ns_vars, ns_arr, NULL);
+        assert(lf2 == mtbdd_true);
+
+        // decode target
+        int to = 0;
+        for (int i=0; i<game.statebits; i++) {
+            to <<= 1;
+            if (ns_arr[game.priobits+i]) to |= 1;
+        }
+        to = mapper.at(to);
+
+        pargame->e_start(cap_v);
+        pargame->e_add(cap_v, to);
+        pargame->e_finish();
+    }
+
+    // tell Oink we're done adding stuff, resize game to final size
+    pargame->v_resize(vidx);
+
+    return pargame;
 }
 
 
 void
 strategy_to_pg(SymGame *game)
 {
-    LACE_ME;
-
     MTBDD s_vars = mtbdd_set_empty();
     mtbdd_refs_pushptr(&s_vars);
     for (int i=0; i<game->statebits; i++) s_vars = mtbdd_set_add(s_vars, game->priobits+i);
@@ -1139,8 +1329,6 @@ AIGmaker::write(FILE* out)
 bool
 solveSymGame(SymGame *game)
 {
-    LACE_ME;
-
     const int offset = game->cap_count + game->uap_count + game->priobits + game->statebits;
 
     MTBDD s_vars = mtbdd_set_empty();
@@ -1379,7 +1567,7 @@ solveSymGame(SymGame *game)
     }
 
     // Select lowest strategy [heuristic]
-    strategies = CALL(clarify, strategies, cap_vars);
+    strategies = RUN(clarify, strategies, cap_vars);
 
     // Now remove all unreachable states according to the strategy  (slightly smaller controller)
     {
@@ -1548,10 +1736,11 @@ main(int argc, char* argv[])
     // Check if priorities are either all on state or all on transition, check state IDs for compatibility
     bool state_priorities = false;
 
+    bool is_bad = false;
     for (int i=0; i<data->noStates; i++) {
         if (i != data->states[i].id) {
-            std::cerr << "state " << i << " has an invalid id!" << std::endl;
-            return -1;
+            std::cerr << "state " << i << " has an invalid id "  << data->states[i].id << "!" << std::endl;
+            is_bad = true;
         }
         if (data->states[i].noAccSig != 0) {
             if (i == 0) {
@@ -1562,6 +1751,7 @@ main(int argc, char* argv[])
             }
         }
     }
+    if (is_bad) return -1;
 
     if (verbose) {
         if (state_priorities) std::cerr << "priorities are on states" << std::endl;
@@ -1569,8 +1759,7 @@ main(int argc, char* argv[])
     }
 
     // Initialize Lace
-    lace_init(1, 0); // initialize Lace, but sequentially
-    lace_startup(0, 0, 0); // no thread spawning
+    lace_start(1, 0); // initialize Lace, but sequentially
 
     // And initialize Sylvan
     sylvan_set_limits(128LL << 20, 1, 16); // should be enough (128 megabytes)
@@ -1604,7 +1793,6 @@ main(int argc, char* argv[])
 
         // We don't need Sylvan anymore at this point
         sylvan_quit();
-        lace_exit();
 
         if (write_pg) {
             // in case we want to write the file to PGsolver file format...
@@ -1662,19 +1850,21 @@ main(int argc, char* argv[])
         }
     } else {
         // Construct the game
-        SymGame sym;
         const double t_before_construct = wctime();
-        constructSymGame(data, &sym, isMaxParity, controllerIsOdd);
+        auto sym = constructSymGame(data, isMaxParity, controllerIsOdd);
         const double t_after_construct = wctime();
+
+        if (write_pg) {
+            // in case we want to write the file to PGsolver file format...
+            auto pg = symgame_to_pg(*sym);
+            pg->write_pgsolver(std::cout);
+            exit(0);
+        }
 
         if (verbose) std::cerr << "finished constructing game in " << std::fixed << (t_after_construct - t_before_construct) << " sec." << std::endl;
 
-        mtbdd_refs_pushptr(&sym.trans);
-        for (int i=0; i<sym.cap_count; i++) mtbdd_refs_pushptr(&sym.cap_bdds[i]);
-        for (int i=0; i<sym.statebits; i++) mtbdd_refs_pushptr(&sym.state_bdds[i]);
-
         const double t_before_solve = wctime();
-        bool res = solveSymGame(&sym);
+        bool res = solveSymGame(sym);
         const double t_after_solve = wctime();
 
         if (verbose) std::cerr << "finished solving game in " << std::fixed << (t_after_solve - t_before_solve) << " sec." << std::endl;
@@ -1687,16 +1877,16 @@ main(int argc, char* argv[])
              */
 
             if (options["print-witness"].count() > 0) {
-                strategy_to_pg(&sym);
+                strategy_to_pg(sym);
                 exit(10);
             }
 
-            AIGmaker maker(data, &sym);
-            for (int i=0; i<sym.cap_count; i++) {
-                maker.processCAP(i, sym.cap_bdds[i]);
+            AIGmaker maker(data, sym);
+            for (int i=0; i<sym->cap_count; i++) {
+                maker.processCAP(i, sym->cap_bdds[i]);
             }
-            for (int i=0; i<sym.statebits; i++) {
-                maker.processState(i, sym.state_bdds[i]);
+            for (int i=0; i<sym->statebits; i++) {
+                maker.processState(i, sym->state_bdds[i]);
             }
 
             std::cout << "REALIZABLE" << std::endl;
@@ -1710,5 +1900,7 @@ main(int argc, char* argv[])
         // free HOA allocated data structure
         resetHoa(data);
     }
+
+    lace_stop();
 }
 

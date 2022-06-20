@@ -33,6 +33,7 @@
 #include <set>
 #include <sys/time.h> // for gettimeofday
 #include <queue>
+#include <tuple>
 
 #include <game.hpp>
 #include <oink.hpp>
@@ -1111,6 +1112,7 @@ private:
 
     std::map<MTBDD, int> mapping; // map MTBDD to AIGER literal
     std::map<uint64_t, int> cache; // cache for ands
+    std::map<std::tuple<int, int>, int> cache_pair_gates; // cache for ands v2
 
     int bdd_to_aig(MTBDD bdd);
     int makeand(int rhs0, int rhs1);
@@ -1213,8 +1215,10 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
 
     // a queue that stores all products, which will need to be summed
     std::queue<int> products;
+    int productCount = 0;
 
     while (res != zdd_false) {
+        productCount++;
         int i = 0;
         int variable = product[i];
         
@@ -1224,14 +1228,28 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
 
         while (variable != -1) { // if it is -1 then we have reached the last variable in the product
             int next_var = product[i+1]; // the next variable in the product
+            // printf("variables are %d and %d\n", variable, next_var);
             if (next_var != -1) { // then we have a pair
                 // if the variable is even then the bdd variable is in the product
                 //  else the negation of the variable is in the product
                 int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
                 int lit2 = ((next_var % 2) == 0) ? var_to_lit[next_var/2] : aiger_not(var_to_lit[next_var/2]);
 
+                std::tuple<int, int> pair_gate(lit1, lit2);
+                auto it = cache_pair_gates.find(pair_gate);
+                if (it != cache_pair_gates.end()) {
+                    gates.push(it->second);
+                    i+=2;
+                    variable = product[i];
+                    continue;
+                }
+
+
                 int and_gate = makeand(lit1, lit2);
                 gates.push(and_gate);
+
+                // we also want to store this gate for potential future use
+                cache_pair_gates[pair_gate] = and_gate;
             } else { // we have a single variable that needs to be AND'd with the rest of the AND-gates
                 int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
                 gates.push(lit1);
@@ -1258,6 +1276,8 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
         }
         res = zdd_cover_enum_next(isop, product); // go to the next product
     }
+    // printf("total is %d\n", productCount);
+
     // products queue should now be full of complete products that need to be summed
     int aig = 0;
 

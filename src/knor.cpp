@@ -38,6 +38,7 @@
 #include <solvers.hpp>
 #include <tools/cxxopts.hpp>
 #include <sylvan.h>
+#include <queue>
 
 extern "C" {
 #include "simplehoa.h"
@@ -1200,65 +1201,148 @@ AIGmaker::makeand(int rhs0, int rhs1)
 
 
 
+
 int
-AIGmaker::bdd_to_aig(MTBDD bdd)
+AIGmaker::bdd_to_aig(MTBDD bdd) 
 {
-    if (bdd == mtbdd_true) return aiger_true;
-    if (bdd == mtbdd_false) return aiger_false;
- 
-    bool comp = false;
-    if (bdd & sylvan_complement) {
-        bdd ^= sylvan_complement;
-        comp = true;
-    }
+    printf("I was called\n");
+    ZDD isop;
+    bdd = zdd_isop(bdd, bdd, &isop);
+    printf("isop was called\n");
 
-    auto it = mapping.find(bdd);
-    if (it != mapping.end()) {
-        return comp ? aiger_not(it->second) : it->second;
-    }
+    // a product could consist of all variables, and a -1 to denote 
+    //  the end of the product
+    int product[game->statebits+game->priobits+game->uap_count+1]; 
+    ZDD res = zdd_cover_enum_first(isop, product);
 
-    int the_lit = var_to_lit[mtbdd_getvar(bdd)];
+    // a queue that stores all products, which will need to be summed
+    std::queue<int> products;
 
-    MTBDD low = mtbdd_getlow(bdd);
-    MTBDD high = mtbdd_gethigh(bdd);
-
-    int res;
-
-    if (low == mtbdd_false) {
-        // only high (value 1)
-        if (high == mtbdd_true) {
-            // actually this is the end, just the lit
-            res = the_lit;
-        } else {
-            // AND(the_lit, ...)
-            int rhs0 = the_lit;
-            int rhs1 = bdd_to_aig(high);
-            res = makeand(rhs0, rhs1);
-        }
-    } else if (high == mtbdd_false) {
-        // only low (value 0)
-        if (low == mtbdd_true) {
-            // actually this is the end, just the lit, negated
-            res = aiger_not(the_lit);
-        } else {
-            // AND(not the_lit, ...)
-            int rhs0 = aiger_not(the_lit);
-            int rhs1 = bdd_to_aig(low);
-            res = makeand(rhs0, rhs1);
-        }
-    } else {
-        // OR(low, high) == ~AND(~AND(the_lit, ...), ~AND(~the_lit, ...))
-        int lowres = bdd_to_aig(low);
-        int highres = bdd_to_aig(high);
-        int rhs0 = aiger_not(makeand(aiger_not(the_lit), lowres));
-        int rhs1 = aiger_not(makeand(the_lit, highres));
-        res = aiger_not(makeand(rhs0, rhs1));
-    }
+    while (res != zdd_false) {
+        int i = 0;
+        int variable = product[i];
         
-    mapping[bdd] = res;
+        // queue containing subproducts in the form of gates
+        std::queue<int> gates;
+        
+        while (variable != -1) { // if it is -1 then we have reached the last variable in the product
+            int next_var = product[i+1]; // the next variable in the product
 
-    return comp ? aiger_not(res) : res;
+            if (next_var != -1) { // then we have a pair
+                // if the variable is even then the bdd variable is in the product
+                //  else the negation of the variable is in the product
+                int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
+                int lit2 = ((next_var % 2) == 0) ? var_to_lit[next_var/2] : aiger_not(var_to_lit[next_var/2]);
+
+                int and_gate = makeand(lit1, lit2);
+                gates.push(and_gate);
+            } else { // we have a single variable that needs to be AND'd with the rest of the AND-gates
+                int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
+                gates.push(lit1);
+            }
+            i+=2;
+            variable = product[i];
+        }
+
+        // while we still have subproducts we need to AND together
+        while (!gates.empty()) {
+            int gate1 = gates.front();
+            gates.pop();
+            if (!gates.empty()) {
+                int gate2 = gates.front(); // get 2nd element for a gate
+                gates.pop();
+                int new_gate = makeand(gate1, gate2);
+                gates.push(new_gate); // another preliminary gate
+            } 
+            else {
+                products.push(gate1); // this gate is the full product
+            }
+        }
+        res = zdd_cover_enum_next(isop, product); // go to the next product
+    }
+    // products queue should now be full of complete products that need to be summed
+    printf("I have all products\n");
+    int aig = 0;
+
+    while (!products.empty()) {
+
+        int product1 = products.front();
+        products.pop();
+        if(!products.empty()) {
+            int product2 = products.front();
+            products.pop();
+            int summed_product = aiger_not(makeand(aiger_not(product1), aiger_not(product2)));
+            products.push(summed_product);
+        } else { // product1 is the final sum of all products
+            aig = product1;
+        }
+    }
+    printf("I am returning the aig");
+    return aig;
+
 }
+
+
+
+// int
+// AIGmaker::bdd_to_aig(MTBDD bdd)
+// {
+//     if (bdd == mtbdd_true) return aiger_true;
+//     if (bdd == mtbdd_false) return aiger_false;
+ 
+//     bool comp = false;
+//     if (bdd & sylvan_complement) {
+//         bdd ^= sylvan_complement;
+//         comp = true;
+//     }
+
+//     auto it = mapping.find(bdd);
+//     if (it != mapping.end()) {
+//         return comp ? aiger_not(it->second) : it->second;
+//     }
+
+//     int the_lit = var_to_lit[mtbdd_getvar(bdd)];
+
+//     MTBDD low = mtbdd_getlow(bdd);
+//     MTBDD high = mtbdd_gethigh(bdd);
+
+//     int res;
+
+//     if (low == mtbdd_false) {
+//         // only high (value 1)
+//         if (high == mtbdd_true) {
+//             // actually this is the end, just the lit
+//             res = the_lit;
+//         } else {
+//             // AND(the_lit, ...)
+//             int rhs0 = the_lit;
+//             int rhs1 = bdd_to_aig(high);
+//             res = makeand(rhs0, rhs1);
+//         }
+//     } else if (high == mtbdd_false) {
+//         // only low (value 0)
+//         if (low == mtbdd_true) {
+//             // actually this is the end, just the lit, negated
+//             res = aiger_not(the_lit);
+//         } else {
+//             // AND(not the_lit, ...)
+//             int rhs0 = aiger_not(the_lit);
+//             int rhs1 = bdd_to_aig(low);
+//             res = makeand(rhs0, rhs1);
+//         }
+//     } else {
+//         // OR(low, high) == ~AND(~AND(the_lit, ...), ~AND(~the_lit, ...))
+//         int lowres = bdd_to_aig(low);
+//         int highres = bdd_to_aig(high);
+//         int rhs0 = aiger_not(makeand(aiger_not(the_lit), lowres));
+//         int rhs1 = aiger_not(makeand(the_lit, highres));
+//         res = aiger_not(makeand(rhs0, rhs1));
+//     }
+        
+//     mapping[bdd] = res;
+
+//     return comp ? aiger_not(res) : res;
+// }
 
 
 void

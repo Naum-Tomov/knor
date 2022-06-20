@@ -32,6 +32,7 @@
 #include <map>
 #include <set>
 #include <sys/time.h> // for gettimeofday
+#include <queue>
 
 #include <game.hpp>
 #include <oink.hpp>
@@ -1200,47 +1201,80 @@ AIGmaker::makeand(int rhs0, int rhs1)
 
 
 
-// we need some field that holds all products, potentially a 2d array, but I've heard those aren't great?
+int
+AIGmaker::bdd_to_aig(MTBDD bdd) {
+    ZDD isop;
+    bdd = zdd_isop(bdd, bdd, &isop);
 
-// global int products[][];
-// global int productIndex;
+    // a product could consist of all variables, and a -1 to denote 
+    //  the end of the product
+    int product[game->statebits+game->priobits+game->uap_count+1]; 
+    ZDD res = zdd_cover_enum_first(isop, product);
 
-// addProduct(int product[], int num_of_literals) {
-// 	global products[productIndex] = products[0:num_of_literals];
-// 	productIndex++;
-// }
+    // a queue that stores all products, which will need to be summed
+    std::queue<int> products;
 
-// addProducts(ZDD node, int path[], pathLen) {
+    while (res != zdd_false) {
+        int i = 0;
+        int variable = product[i];
+        
+        // queue containing subproducts in the form of gates
+        std::queue<int> gates;
+        
+        while (variable != -1) { // if it is -1 then we have reached the last variable in the product
+            int next_var = product[i+1]; // the next variable in the product
 
-// 	if (node == NULL) return;
+            if (next_var != -1) { // then we have a pair
+                // if the variable is even then the bdd variable is in the product
+                //  else the negation of the variable is in the product
+                int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
+                int lit2 = ((next_var % 2) == 0) ? var_to_lit[next_var/2] : aiger_not(var_to_lit[next_var/2]);
 
-// 	path[pathLen] = zdd_getvariable(node);
+                int and_gate = makeand(lit1, lit2)
+                gates.push(and_gate);
+            } else { // we have a single variable that needs to be AND'd with the rest of the AND-gates
+                int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
+                gates.push(and_gate);
+            }
+            i+=2;
+            variable = product[i];
+        }
 
-// 	pathLen++;
-	
-// 	if (node == zdd_true) { addProduct(path, pathLen); }
-// 	else if (node == zdd_false) { return; }
-// 	else {
-// 		addProducts(zdd_followlow(node), path, pathLen);
-// 		addProducts(zdd_followhigh(node), path, pathLen);
-// 	}
-// }
+        // while we still have subproducts we need to AND together
+        while (!gates.empty()) {
+            int gate1 = gates.pop();
+            if (!gates.empty()) {
+                int gate2 = gates.pop(); // get 2nd element for a gate
+                int new_gate = makeand(gate1, gate2);
+                gates.push(new_gate); // another preliminary gate
+            } 
+            else {
+                products.push(gate1); // this gate is the full product
+            }
+        }
+        res = zdd_cover_enum_next(isop, product); // go to the next product
+    }
+    // products queue should now be full of complete products that need to be summed
 
-// bdd_to_aig(MTBDD bdd)
+    int res;
 
-// 	ZDD isop;
-// 	bdd = zdd_isop(bdd, bdd, &isop);
+    while (!products.empty()) {
 
-// 	int product[100];
-	
-// 	addProducts(isop, product, 0)
+        int product1 = products.pop();
+        if(!products.empty()) {
+            int product2 = products.pop();
+            int summed_product = aiger_not(makeand(aiger_not(product1), aiger_not(product2)));
+            products.push(summed_product);
+        } else { // product1 is the final sum of all products
+            res = product1;
+        }
 
-//  products[][] is now filled with products of variables
-//  we can use var_to_lit to start creating and gates for all products systematically
-//  after we have all the products as AND gates, can start inverting the outputs and feeding them to
-//  NAND gates to get the sum of those products
+    }
+    
+    return res;
 
-//  then we are done
+}
+
 
 
 int

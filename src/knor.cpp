@@ -1205,10 +1205,8 @@ AIGmaker::makeand(int rhs0, int rhs1)
 int
 AIGmaker::bdd_to_aig(MTBDD bdd) 
 {
-    printf("I was called\n");
     ZDD isop;
     bdd = zdd_isop(bdd, bdd, &isop);
-    printf("isop was called\n");
 
     // a product could consist of all variables, and a -1 to denote 
     //  the end of the product
@@ -1261,7 +1259,6 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
         res = zdd_cover_enum_next(isop, product); // go to the next product
     }
     // products queue should now be full of complete products that need to be summed
-    printf("I have all products\n");
     int aig = 0;
 
     while (!products.empty()) {
@@ -1277,7 +1274,6 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
             aig = product1;
         }
     }
-    printf("I am returning the aig");
     return aig;
 
 }
@@ -1806,6 +1802,7 @@ main(int argc, char* argv[])
     sylvan_set_limits(128LL << 20, 1, 16); // should be enough (128 megabytes)
     sylvan_init_package();
     sylvan_init_mtbdd();
+    sylvan_init_zdd();
 
     bool explicit_solver = options["sym"].count() == 0;
     bool naive_splitting = options["naive"].count() > 0;

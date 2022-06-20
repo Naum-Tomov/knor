@@ -1209,8 +1209,10 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
 
     // a product could consist of all variables, and a -1 to denote 
     //  the end of the product
-    int product[game->statebits+game->priobits+game->uap_count+1]; 
+    int product[game->statebits+game->priobits+game->uap_count+1] = { 0 }; 
     ZDD res = zdd_cover_enum_first(isop, product);
+    printf("enum was called\n");
+
 
     // a queue that stores all products, which will need to be summed
     std::queue<int> products;
@@ -1222,9 +1224,12 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
         // queue containing subproducts in the form of gates
         std::queue<int> gates;
         
-        while (variable != -1) { // if it is -1 then we have reached the last variable in the product
-            int next_var = product[i+1]; // the next variable in the product
+        printf("starting going through members of product\n");
 
+        while (variable != -1) { // if it is -1 then we have reached the last variable in the product
+            printf("%d\n", variable);
+            int next_var = product[i+1]; // the next variable in the product
+            printf("got the next var\n");
             if (next_var != -1) { // then we have a pair
                 // if the variable is even then the bdd variable is in the product
                 //  else the negation of the variable is in the product
@@ -1240,6 +1245,7 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
             i+=2;
             variable = product[i];
         }
+        printf("all literals of a product added\n");
 
         // while we still have subproducts we need to AND together
         while (!gates.empty()) {
@@ -1253,6 +1259,8 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
             } 
             else {
                 products.push(gate1); // this gate is the full product
+                printf("product added\n");
+
             }
         }
         res = zdd_cover_enum_next(isop, product); // go to the next product

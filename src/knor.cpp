@@ -32,7 +32,6 @@
 #include <map>
 #include <set>
 #include <sys/time.h> // for gettimeofday
-#include <queue>
 
 #include <game.hpp>
 #include <oink.hpp>
@@ -1199,12 +1198,13 @@ AIGmaker::makeand(int rhs0, int rhs1)
     }
 }
 
-
-
 int
-AIGmaker::bdd_to_aig(MTBDD bdd) {
+AIGmaker::bdd_to_aig(MTBDD bdd) 
+{
+    printf("I was called\n");
     ZDD isop;
     bdd = zdd_isop(bdd, bdd, &isop);
+    printf("isop was called\n");
 
     // a product could consist of all variables, and a -1 to denote 
     //  the end of the product
@@ -1230,11 +1230,11 @@ AIGmaker::bdd_to_aig(MTBDD bdd) {
                 int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
                 int lit2 = ((next_var % 2) == 0) ? var_to_lit[next_var/2] : aiger_not(var_to_lit[next_var/2]);
 
-                int and_gate = makeand(lit1, lit2)
+                int and_gate = makeand(lit1, lit2);
                 gates.push(and_gate);
             } else { // we have a single variable that needs to be AND'd with the rest of the AND-gates
                 int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
-                gates.push(and_gate);
+                gates.push(lit1);
             }
             i+=2;
             variable = product[i];
@@ -1242,9 +1242,11 @@ AIGmaker::bdd_to_aig(MTBDD bdd) {
 
         // while we still have subproducts we need to AND together
         while (!gates.empty()) {
-            int gate1 = gates.pop();
+            int gate1 = gates.front();
+            gates.pop();
             if (!gates.empty()) {
-                int gate2 = gates.pop(); // get 2nd element for a gate
+                int gate2 = gates.front(); // get 2nd element for a gate
+                gates.pop();
                 int new_gate = makeand(gate1, gate2);
                 gates.push(new_gate); // another preliminary gate
             } 
@@ -1255,87 +1257,86 @@ AIGmaker::bdd_to_aig(MTBDD bdd) {
         res = zdd_cover_enum_next(isop, product); // go to the next product
     }
     // products queue should now be full of complete products that need to be summed
-
-    int res;
+    printf("I have all products\n");
+    int aig = 0;
 
     while (!products.empty()) {
 
-        int product1 = products.pop();
+        int product1 = products.front();
+        products.pop();
         if(!products.empty()) {
-            int product2 = products.pop();
+            int product2 = products.front();
+            products.pop();
             int summed_product = aiger_not(makeand(aiger_not(product1), aiger_not(product2)));
             products.push(summed_product);
         } else { // product1 is the final sum of all products
-            res = product1;
+            aig = product1;
         }
-
     }
-    
-    return res;
+    printf("I am returning the aig");
+    return aig;
 
 }
 
-
-
-int
-AIGmaker::bdd_to_aig(MTBDD bdd)
-{
-    if (bdd == mtbdd_true) return aiger_true;
-    if (bdd == mtbdd_false) return aiger_false;
+// int
+// AIGmaker::bdd_to_aig(MTBDD bdd)
+// {
+//     if (bdd == mtbdd_true) return aiger_true;
+//     if (bdd == mtbdd_false) return aiger_false;
  
-    bool comp = false;
-    if (bdd & sylvan_complement) {
-        bdd ^= sylvan_complement;
-        comp = true;
-    }
+//     bool comp = false;
+//     if (bdd & sylvan_complement) {
+//         bdd ^= sylvan_complement;
+//         comp = true;
+//     }
 
-    auto it = mapping.find(bdd);
-    if (it != mapping.end()) {
-        return comp ? aiger_not(it->second) : it->second;
-    }
+//     auto it = mapping.find(bdd);
+//     if (it != mapping.end()) {
+//         return comp ? aiger_not(it->second) : it->second;
+//     }
 
-    int the_lit = var_to_lit[mtbdd_getvar(bdd)];
+//     int the_lit = var_to_lit[mtbdd_getvar(bdd)];
 
-    MTBDD low = mtbdd_getlow(bdd);
-    MTBDD high = mtbdd_gethigh(bdd);
+//     MTBDD low = mtbdd_getlow(bdd);
+//     MTBDD high = mtbdd_gethigh(bdd);
 
-    int res;
+//     int res;
 
-    if (low == mtbdd_false) {
-        // only high (value 1)
-        if (high == mtbdd_true) {
-            // actually this is the end, just the lit
-            res = the_lit;
-        } else {
-            // AND(the_lit, ...)
-            int rhs0 = the_lit;
-            int rhs1 = bdd_to_aig(high);
-            res = makeand(rhs0, rhs1);
-        }
-    } else if (high == mtbdd_false) {
-        // only low (value 0)
-        if (low == mtbdd_true) {
-            // actually this is the end, just the lit, negated
-            res = aiger_not(the_lit);
-        } else {
-            // AND(not the_lit, ...)
-            int rhs0 = aiger_not(the_lit);
-            int rhs1 = bdd_to_aig(low);
-            res = makeand(rhs0, rhs1);
-        }
-    } else {
-        // OR(low, high) == ~AND(~AND(the_lit, ...), ~AND(~the_lit, ...))
-        int lowres = bdd_to_aig(low);
-        int highres = bdd_to_aig(high);
-        int rhs0 = aiger_not(makeand(aiger_not(the_lit), lowres));
-        int rhs1 = aiger_not(makeand(the_lit, highres));
-        res = aiger_not(makeand(rhs0, rhs1));
-    }
+//     if (low == mtbdd_false) {
+//         // only high (value 1)
+//         if (high == mtbdd_true) {
+//             // actually this is the end, just the lit
+//             res = the_lit;
+//         } else {
+//             // AND(the_lit, ...)
+//             int rhs0 = the_lit;
+//             int rhs1 = bdd_to_aig(high);
+//             res = makeand(rhs0, rhs1);
+//         }
+//     } else if (high == mtbdd_false) {
+//         // only low (value 0)
+//         if (low == mtbdd_true) {
+//             // actually this is the end, just the lit, negated
+//             res = aiger_not(the_lit);
+//         } else {
+//             // AND(not the_lit, ...)
+//             int rhs0 = aiger_not(the_lit);
+//             int rhs1 = bdd_to_aig(low);
+//             res = makeand(rhs0, rhs1);
+//         }
+//     } else {
+//         // OR(low, high) == ~AND(~AND(the_lit, ...), ~AND(~the_lit, ...))
+//         int lowres = bdd_to_aig(low);
+//         int highres = bdd_to_aig(high);
+//         int rhs0 = aiger_not(makeand(aiger_not(the_lit), lowres));
+//         int rhs1 = aiger_not(makeand(the_lit, highres));
+//         res = aiger_not(makeand(rhs0, rhs1));
+//     }
         
-    mapping[bdd] = res;
+//     mapping[bdd] = res;
 
-    return comp ? aiger_not(res) : res;
-}
+//     return comp ? aiger_not(res) : res;
+// }
 
 
 void
@@ -1799,6 +1800,7 @@ main(int argc, char* argv[])
     sylvan_set_limits(128LL << 20, 1, 16); // should be enough (128 megabytes)
     sylvan_init_package();
     sylvan_init_mtbdd();
+    sylvan_init_zdd();
 
     bool explicit_solver = options["sym"].count() == 0;
     bool naive_splitting = options["naive"].count() > 0;

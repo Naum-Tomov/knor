@@ -1112,14 +1112,8 @@ private:
 
     std::map<MTBDD, int> mapping; // map MTBDD to AIGER literal
     std::map<uint64_t, int> cache; // cache for ands
-    std::map<std::tuple<int, int>, int> cache_pair_gates; // cache for ands v2
-
-    int nodeCount = 0;
-    std::set<int> unique_nodes;
-
     int bdd_to_aig(MTBDD bdd);
     int makeand(int rhs0, int rhs1);
-    void nodeCounter(MTBDD bdd);
 
 public:
     AIGmaker(HoaData *data, SymGame *game);
@@ -1205,37 +1199,17 @@ AIGmaker::makeand(int rhs0, int rhs1)
     }
 }
 
-void
-AIGmaker::nodeCounter(MTBDD bdd) 
-{
-    if ((bdd == mtbdd_false) | (bdd == mtbdd_true)) {
-        return;
-    }
-    bool found = false;
-    auto it = unique_nodes.find(mtbdd_getvar(bdd));
-    if (it != unique_nodes.end()) {
-        found = true;
-    } else {
-        unique_nodes.insert(mtbdd_getvar(bdd));
-    }
-    if (!found) nodeCount++;
-    nodeCounter(mtbdd_getlow(bdd));
-    nodeCounter(mtbdd_gethigh(bdd));
-}
-
 
 int
 AIGmaker::bdd_to_aig(MTBDD bdd) 
 {
-
-    nodeCounter(bdd);
-
     ZDD isop;
     bdd = zdd_isop(bdd, bdd, &isop);
 
     // a product could consist of all variables, and a -1 to denote 
     //  the end of the product
     int product[game->statebits+game->priobits+game->uap_count+1] = { 0 }; 
+    int productFlag[game->statebits+game->priobits+game->uap_count+1] = { 0 }; 
     ZDD res = zdd_cover_enum_first(isop, product);
 
 
@@ -1244,16 +1218,64 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
     int productCount = 0;
 
     while (res != zdd_false) {
-        productCount++;
-        int i = 0;
-        int variable = product[i];
-        
         // queue containing subproducts in the form of gates
         std::queue<int> gates;
-        
 
+
+        // we need to check if for any pair of the current variables in the product
+        //  there already exists a gate, so we can avoid making redundant gates
+        for (auto i = cache.begin(); i != cache.end(); i++)
+        {
+            int rightHalf = i->first; // right half is the 2nd variable of this gate
+            int leftHalf = ((i->first)>>32); // left half is the 1st variable
+            int var = 0;
+            int index = 0;
+            while (var != -1) { // go through each variable of the product
+                var = product[index];
+                int literal = ((var % 2) == 0) ? var_to_lit[var/2] : aiger_not(var_to_lit[var/2]);
+                if (literal == rightHalf) { // we have found 1 match, we need a 2nd to use the cache
+                    int var2 = 0;
+                    int index2 = 0;
+                    while (var2 != -1) {
+                        var2 = product[index2];
+                        int literal2 = ((var2 % 2) == 0) ? var_to_lit[var2/2] : aiger_not(var_to_lit[var2/2]);
+                        if (literal2 == leftHalf) { // a gate for these exists
+                            gates.push(i->second); // add the gate to be conjuncted with the rest
+                            // now we need to flag that these variables do not need to be added to 
+                            //  the subproducts, thus we set them to -2
+                            productFlag[index] = -2;
+                            productFlag[index2] = -2;
+                        }
+                        index2++;
+                    }
+                }
+                index++;
+            }
+        }
+
+        productCount++;
+
+        int i = 0;
+        int variable = product[i]; 
         while (variable != -1) { // if it is -1 then we have reached the last variable in the product
+            variable = product[i]; 
+            while(productFlag[i] == -2) { // this variable already had a gate
+                i++;
+                variable = product[i]; 
+            }
+            if(variable == -1) { // we have all the gates we need
+                break;
+            }
             int next_var = product[i+1]; // the next variable in the product
+            while(productFlag[i+1] == -2) {
+                i++;
+                next_var = product[i+1]; 
+            }
+            if(next_var == -1) { // only the first variable needs a gate
+                int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
+                gates.push(lit1);
+                break;
+            }
             // printf("variables are %d and %d\n", variable, next_var);
             if (next_var != -1) { // then we have a pair
                 // if the variable is even then the bdd variable is in the product
@@ -1261,30 +1283,16 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
                 int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
                 int lit2 = ((next_var % 2) == 0) ? var_to_lit[next_var/2] : aiger_not(var_to_lit[next_var/2]);
 
-                std::tuple<int, int> pair_gate(lit1, lit2);
-                auto it = cache_pair_gates.find(pair_gate);
-                if (it != cache_pair_gates.end()) {
-                    gates.push(it->second);
-                    i+=2;
-                    variable = product[i];
-                    continue;
-                }
-
-
                 int and_gate = makeand(lit1, lit2);
                 gates.push(and_gate);
-
-                // we also want to store this gate for potential future use
-                cache_pair_gates[pair_gate] = and_gate;
             } else { // we have a single variable that needs to be AND'd with the rest of the AND-gates
                 int lit1 = ((variable % 2) == 0) ? var_to_lit[variable/2] : aiger_not(var_to_lit[variable/2]);
                 gates.push(lit1);
                 break;
             }
             i+=2;
-            variable = product[i];
         }
-
+        
         // while we still have subproducts we need to AND together
         while (!gates.empty()) {
             int gate1 = gates.front();
@@ -1297,7 +1305,6 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
             } 
             else {
                 products.push(gate1); // this gate is the full product
-
             }
         }
         res = zdd_cover_enum_next(isop, product); // go to the next product
@@ -1321,7 +1328,6 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
         }
     }
 
-    printf("the amount of unique nodes in the bdd were %d\n", nodeCount);
     return aig;
 
 }

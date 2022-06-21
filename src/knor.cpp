@@ -1114,8 +1114,12 @@ private:
     std::map<uint64_t, int> cache; // cache for ands
     std::map<std::tuple<int, int>, int> cache_pair_gates; // cache for ands v2
 
+    int nodeCount = 0;
+    std::set<int> unique_nodes;
+
     int bdd_to_aig(MTBDD bdd);
     int makeand(int rhs0, int rhs1);
+    void nodeCounter(MTBDD bdd);
 
 public:
     AIGmaker(HoaData *data, SymGame *game);
@@ -1201,9 +1205,31 @@ AIGmaker::makeand(int rhs0, int rhs1)
     }
 }
 
+void
+AIGmaker::nodeCounter(MTBDD bdd) 
+{
+    if ((bdd == mtbdd_false) | (bdd == mtbdd_true)) {
+        return;
+    }
+    bool found = false;
+    auto it = unique_nodes.find(mtbdd_getvar(bdd));
+    if (it != unique_nodes.end()) {
+        found = true;
+    } else {
+        unique_nodes.insert(mtbdd_getvar(bdd));
+    }
+    if (!found) nodeCount++;
+    nodeCounter(mtbdd_getlow(bdd));
+    nodeCounter(mtbdd_gethigh(bdd));
+}
+
+
 int
 AIGmaker::bdd_to_aig(MTBDD bdd) 
 {
+
+    nodeCounter(bdd);
+
     ZDD isop;
     bdd = zdd_isop(bdd, bdd, &isop);
 
@@ -1294,6 +1320,8 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
             aig = product1;
         }
     }
+
+    printf("the amount of unique nodes in the bdd were %d\n", nodeCount);
     return aig;
 
 }

@@ -1114,6 +1114,7 @@ private:
     std::map<uint64_t, int> cache; // cache for ands
     int bdd_to_aig(MTBDD bdd);
     int makeand(int rhs0, int rhs1);
+    void check_cache_products(std::queue<int>& myQueue, int* contents_arr, int* flag_arr);
 
 public:
     AIGmaker(HoaData *data, SymGame *game);
@@ -1200,6 +1201,38 @@ AIGmaker::makeand(int rhs0, int rhs1)
 }
 
 
+void
+AIGmaker::check_cache_products(std::queue<int>& myQueue, int *contents_arr, int *flag_arr) {
+    for (auto i = cache.begin(); i != cache.end(); i++)
+            {
+                int rightHalf = i->first; // right half is the 2nd variable of this gate
+                int leftHalf = ((i->first)>>32); // left half is the 1st variable
+                int var = 0;
+                int index = 0;
+                while (var != -1) { // go through each variable of the product
+                    var = contents_arr[index];
+                    int literal = ((var % 2) == 0) ? var_to_lit[var/2] : aiger_not(var_to_lit[var/2]);
+                    if (literal == rightHalf) { // we have found 1 match, we need a 2nd to use the cache
+                        int var2 = 0;
+                        int index2 = 0;
+                        while (var2 != -1) {
+                            var2 = contents_arr[index2];
+                            int literal2 = ((var2 % 2) == 0) ? var_to_lit[var2/2] : aiger_not(var_to_lit[var2/2]);
+                            if (literal2 == leftHalf) { // a gate for these exists
+                                myQueue.push(i->second); // add the gate to be conjuncted with the rest
+                                // now we need to flag that these variables do not need to be added to 
+                                //  the subproducts, thus we set them to -2
+                                flag_arr[index] = -2;
+                                flag_arr[index2] = -2;
+                            }
+                            index2++;
+                        }
+                    }
+                    index++;
+                }
+            }
+}
+
 int
 AIGmaker::bdd_to_aig(MTBDD bdd) 
 {
@@ -1224,34 +1257,7 @@ AIGmaker::bdd_to_aig(MTBDD bdd)
 
         // we need to check if for any pair of the current variables in the product
         //  there already exists a gate, so we can avoid making redundant gates
-        for (auto i = cache.begin(); i != cache.end(); i++)
-        {
-            int rightHalf = i->first; // right half is the 2nd variable of this gate
-            int leftHalf = ((i->first)>>32); // left half is the 1st variable
-            int var = 0;
-            int index = 0;
-            while (var != -1) { // go through each variable of the product
-                var = product[index];
-                int literal = ((var % 2) == 0) ? var_to_lit[var/2] : aiger_not(var_to_lit[var/2]);
-                if (literal == rightHalf) { // we have found 1 match, we need a 2nd to use the cache
-                    int var2 = 0;
-                    int index2 = 0;
-                    while (var2 != -1) {
-                        var2 = product[index2];
-                        int literal2 = ((var2 % 2) == 0) ? var_to_lit[var2/2] : aiger_not(var_to_lit[var2/2]);
-                        if (literal2 == leftHalf) { // a gate for these exists
-                            gates.push(i->second); // add the gate to be conjuncted with the rest
-                            // now we need to flag that these variables do not need to be added to 
-                            //  the subproducts, thus we set them to -2
-                            productFlag[index] = -2;
-                            productFlag[index2] = -2;
-                        }
-                        index2++;
-                    }
-                }
-                index++;
-            }
-        }
+        check_cache_products(gates, product, productFlag);
 
         productCount++;
 
